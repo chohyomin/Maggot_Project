@@ -14,14 +14,14 @@ from google.generativeai.types import HarmCategory, HarmBlockThreshold
 # 0. 시스템 설정
 # ------------------------------------------------------
 st.set_page_config(
-    page_title="Forensic AI V22.0 (Expert Edition)", 
+    page_title="Forensic AI V22.1 (Final Fix)", 
     layout="wide", 
     page_icon="🕵️‍♂️",
     initial_sidebar_state="expanded"
 )
 
 # ------------------------------------------------------
-# 1. AI 두뇌 (약물 탐지 기능 추가)
+# 1. AI 두뇌
 # ------------------------------------------------------
 class AICommanderGemini:
     def __init__(self, api_key, model_name):
@@ -79,7 +79,7 @@ class AICommanderGemini:
             return None
 
 # ------------------------------------------------------
-# 2. 계산 엔진 (법곤충독성학 로직 적용)
+# 2. 계산 엔진
 # ------------------------------------------------------
 class MasterPMICalculatorV22:
     def __init__(self):
@@ -89,8 +89,6 @@ class MasterPMICalculatorV22:
             "Lucilia sericata (Global/Avg)": {"Type": "일반", "LDT": 9.0, "UDT": 35.0, "stages": {"egg": 20, "instar_1": 300, "instar_2": 800, "instar_3_feed": 1400, "instar_3_wander": 2400, "pupa": 4000}}
         }
         
-        # [New] 약물별 성장 속도 보정 계수 (Entomotoxicology Factors)
-        # 1.0 = 정상, >1.0 = 성장 가속, <1.0 = 성장 지연
         self.drug_effects = {
             "None": {"rate": 1.0, "desc": "영향 없음"},
             "Cocaine": {"rate": 1.5, "desc": "성장 대폭 가속 (발열 증가)"},
@@ -106,18 +104,15 @@ class MasterPMICalculatorV22:
         accumulated_adh, adh_history = 0.0, []
         discovery_time = df_weather['Time'].max()
         
-        # 약물 보정 계수 가져오기
         drug_factor = self.drug_effects.get(drug_type, {"rate": 1.0})["rate"]
 
         for idx, row in df_weather.iterrows():
             base_temp = row['Temp']
             current_temp = base_temp
             
-            # 1. 마곳 발열
             if max_maggot_heat > 0 and accumulated_adh > stages['instar_1']: 
                 current_temp += max_maggot_heat
             
-            # 2. 이벤트 시뮬레이션
             is_event = False
             if event_params and event_params['active']:
                 h_diff = (discovery_time - row['Time']).total_seconds() / 3600
@@ -125,12 +120,10 @@ class MasterPMICalculatorV22:
                     current_temp += event_params['temp_increase']
                     is_event = True
 
-            # 3. 유효 적산 온도 (ADH) 계산
             eff_heat = 0
             if ldt < current_temp < udt:
                 eff_heat = (current_temp - ldt) * correction
             
-            # [핵심] 약물 영향 적용 (ADH 적립 속도에 변형을 줌)
             eff_heat = eff_heat * drug_factor
 
             accumulated_adh += eff_heat
@@ -140,7 +133,7 @@ class MasterPMICalculatorV22:
                 "Base_Temp": base_temp,
                 "Final_Temp": current_temp,
                 "Event": is_event,
-                "Drug_Factor": drug_factor # 기록용
+                "Drug_Factor": drug_factor
             })
             
             if accumulated_adh >= target_adh: return row['Time'], pd.DataFrame(adh_history)
@@ -149,10 +142,18 @@ class MasterPMICalculatorV22:
 # ------------------------------------------------------
 # 3. UI 및 제어
 # ------------------------------------------------------
-st.title("🕵️‍♂️ Forensic AI Profiler V22.0")
+st.title("🕵️‍♂️ Forensic AI Profiler V22.1")
 st.markdown("##### 🧬 법곤충독성학(Entomotoxicology) 시뮬레이터")
 
-if 'use_event' not in st.session_state: st.session_state.update({'sp_idx': 0, 'st_idx': 3, 'max_heat': 5.0, 'use_event': False, 'ev_temp': 15.0, 'ev_dur': 2, 'ev_end': 6, 'drug_idx': 0, 'ai_log': "준비 완료"})
+# [수정됨] 안전한 초기화 로직 (하나라도 없으면 채워넣음)
+default_values = {
+    'sp_idx': 0, 'st_idx': 3, 'max_heat': 5.0, 
+    'use_event': False, 'ev_temp': 15.0, 'ev_dur': 2, 'ev_end': 6, 
+    'drug_idx': 0, 'ai_log': "준비 완료"
+}
+for key, val in default_values.items():
+    if key not in st.session_state:
+        st.session_state[key] = val
 
 with st.sidebar:
     st.header("🧠 AI 모델 선택")
@@ -199,7 +200,6 @@ with st.sidebar:
 
                 st.session_state['ai_log'] = "✅ 설정 적용 완료"
                 
-                # 시뮬레이션 값 적용
                 if sim.get("species"):
                     for i, k in enumerate(MasterPMICalculatorV22().insect_db.keys()):
                         if sim["species"].split()[0] in k:
@@ -213,7 +213,6 @@ with st.sidebar:
                     st.session_state['ev_dur'] = sim["event"]["duration"]
                     st.session_state['ev_end'] = sim["event"]["end_hours_ago"]
                 
-                # [New] AI가 약물을 감지했으면 자동 적용
                 if sim.get("drug_type"):
                     d_keys = list(MasterPMICalculatorV22().drug_effects.keys())
                     if sim["drug_type"] in d_keys:
@@ -238,12 +237,11 @@ with c2:
     e_end = st.number_input("종료 시점 (발견 전)", value=st.session_state['ev_end'], disabled=not use_ev)
 
 with c3:
-    st.subheader("3. 독성학(Drug) 설정 [New]")
-    # 약물 선택 UI
+    st.subheader("3. 독성학(Drug) 설정")
     d_opts = list(cal.drug_effects.keys())
-    sel_drug = st.selectbox("발견된 약물", d_opts, index=st.session_state['drug_idx'])
+    # [수정됨] 여기서 에러가 났던 부분을 안전하게 처리했습니다.
+    sel_drug = st.selectbox("발견된 약물", d_opts, index=st.session_state.get('drug_idx', 0))
     
-    # 약물 효과 설명 표시
     eff_info = cal.drug_effects[sel_drug]
     st.caption(f"📝 효과: {eff_info['desc']}")
     st.metric("성장 속도 배율", f"x{eff_info['rate']}")
@@ -256,7 +254,6 @@ if st.button("📡 계산 시작"):
     if not w_data.empty:
         w_df = w_data.reset_index().rename(columns={'time':'Time','temp':'Temp'}).sort_values('Time', ascending=False).interpolate()
         
-        # [New] 약물 타입(sel_drug) 추가 전달
         est, log = cal.calculate(sp, stg, w_df, max_maggot_heat=5.0, 
                                  event_params={"active": use_ev, "temp_increase": e_temp, "duration": e_dur, "end_hours_ago": e_end},
                                  drug_type=sel_drug)
@@ -275,7 +272,6 @@ if st.button("📡 계산 시작"):
             
             st.plotly_chart(fig, use_container_width=True)
             
-            # [New] 엑셀 다운로드 (상세 리포트)
             buf = io.BytesIO()
             with pd.ExcelWriter(buf) as writer:
                 log.to_excel(writer, index=False)
