@@ -9,19 +9,20 @@ import plotly.graph_objects as go
 from meteostat import Point, Hourly
 import google.generativeai as genai
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
+from PIL import Image
 
 # ------------------------------------------------------
 # 0. 시스템 설정
 # ------------------------------------------------------
 st.set_page_config(
-    page_title="Forensic AI V22.1 (Final Fix)", 
+    page_title="Forensic AI V23.0 (Vision)", 
     layout="wide", 
     page_icon="🕵️‍♂️",
     initial_sidebar_state="expanded"
 )
 
 # ------------------------------------------------------
-# 1. AI 두뇌
+# 1. AI 두뇌 (멀티모달 - 텍스트 + 이미지 처리)
 # ------------------------------------------------------
 class AICommanderGemini:
     def __init__(self, api_key, model_name):
@@ -40,21 +41,24 @@ class AICommanderGemini:
             safety_settings=self.safety_settings
         )
         
-    def parse_command(self, user_text):
+    def parse_command(self, user_text, user_image=None):
+        """텍스트와 이미지를 동시에 분석하여 JSON 반환"""
+        
         system_prompt = """
-        You are a Forensic AI Profiler. Output ONLY raw JSON.
+        You are a Forensic AI Profiler with Computer Vision capabilities.
         
         Task:
-        1. Analyze the text for forensic details.
-        2. Detect if any drugs/toxins are mentioned (e.g., Cocaine, Heroin, Amitriptyline, Diabetes meds).
+        1. Analyze the text description for forensic details.
+        2. IF an image is provided, analyze the insect morphology to estimate Species and Stage (instar).
+        3. Detect drugs/toxins from text.
         
-        JSON Structure:
+        Output ONLY raw JSON. Structure:
         {
             "simulation": {
                 "species": "String (Latin name or null)",
-                "stage": "String (stage key or null)",
+                "stage": "String (e.g., 'instar_1', 'instar_3_feed', 'pupa')",
                 "maggot_heat": "Float (default 0)",
-                "drug_type": "String (Select one: 'None', 'Cocaine', 'Heroin', 'Amitriptyline', 'Methamphetamine') - Default 'None' if not sure",
+                "drug_type": "String (Select one: 'None', 'Cocaine', 'Heroin', 'Amitriptyline', 'Methamphetamine')",
                 "event": {
                     "active": "Boolean",
                     "temp_increase": "Float",
@@ -66,12 +70,21 @@ class AICommanderGemini:
                 "homicide_prob": "Integer (0-100)",
                 "suicide_prob": "Integer (0-100)",
                 "accident_prob": "Integer (0-100)",
-                "reasoning": "String (Short explanation in Korean including drug impact if any)"
+                "reasoning": "String (Explain species identification from image if provided, and drug impact)"
             }
         }
         """
+        
         try:
-            response = self.model.generate_content(f"{system_prompt}\n\nUser Scenario: {user_text}")
+            # 이미지 포함 여부에 따라 요청 방식 변경
+            if user_image:
+                # 멀티모달 요청 (프롬프트 + 이미지)
+                inputs = [system_prompt, "\n\nUser Scenario: " + user_text, user_image]
+                response = self.model.generate_content(inputs)
+            else:
+                # 텍스트 전용 요청
+                response = self.model.generate_content(f"{system_prompt}\n\nUser Scenario: {user_text}")
+            
             clean_text = response.text.replace("```json", "").replace("```", "").strip()
             return json.loads(clean_text)
         except Exception as e:
@@ -81,7 +94,7 @@ class AICommanderGemini:
 # ------------------------------------------------------
 # 2. 계산 엔진
 # ------------------------------------------------------
-class MasterPMICalculatorV22:
+class MasterPMICalculatorV23:
     def __init__(self):
         self.insect_db = {
             "Lucilia sericata (Korea - Busan)": {"Type": "한국형", "LDT": 4.5, "UDT": 35.0, "stages": {"egg": 35, "instar_1": 150, "instar_2": 350, "instar_3_feed": 550, "instar_3_wander": 702, "pupa": 4901}},
@@ -142,10 +155,10 @@ class MasterPMICalculatorV22:
 # ------------------------------------------------------
 # 3. UI 및 제어
 # ------------------------------------------------------
-st.title("🕵️‍♂️ Forensic AI Profiler V22.1")
-st.markdown("##### 🧬 법곤충독성학(Entomotoxicology) 시뮬레이터")
+st.title("🕵️‍♂️ Forensic AI Profiler V23.0")
+st.markdown("##### 📸 AI Vision & Entomotoxicology (Multimodal)")
 
-# [수정됨] 안전한 초기화 로직 (하나라도 없으면 채워넣음)
+# 초기화
 default_values = {
     'sp_idx': 0, 'st_idx': 3, 'max_heat': 5.0, 
     'use_event': False, 'ev_temp': 15.0, 'ev_dur': 2, 'ev_end': 6, 
@@ -165,7 +178,7 @@ with st.sidebar:
     selected_model = st.selectbox("사용할 AI 모델:", model_options, index=0)
 
     st.divider()
-    st.header("🎙️ 수사 시나리오")
+    st.header("🎙️ 수사 시나리오 & 증거")
     
     if "GOOGLE_API_KEY" in st.secrets:
         api_key = st.secrets["GOOGLE_API_KEY"]
@@ -174,14 +187,24 @@ with st.sidebar:
         api_key = None
         ai_available = False
         st.error("API Key 없음")
-
-    user_voice = st.text_area("상황 묘사", placeholder="예: 시신에서 코카인 가루가 발견되었고, 대동파리 3령이 채집됨.", height=150)
     
-    if st.button("🔍 분석 실행", disabled=not ai_available):
-        if user_voice:
+    # [New] 이미지 업로드 기능
+    uploaded_file = st.file_uploader("📷 증거 사진 업로드 (파리/유충)", type=["jpg", "png", "jpeg"])
+    image_data = None
+    if uploaded_file is not None:
+        image_data = Image.open(uploaded_file)
+        st.image(image_data, caption="업로드된 증거물", use_container_width=True)
+
+    user_voice = st.text_area("상황 묘사 (텍스트)", placeholder="예: 시신 주변에서 발견된 백색 가루와 곤충 사진입니다.", height=100)
+    
+    if st.button("🔍 멀티모달 분석 실행", disabled=not ai_available):
+        if user_voice or image_data:
             agent = AICommanderGemini(api_key, selected_model)
-            with st.spinner(f"AI({selected_model})가 독성학 분석 중입니다..."):
-                result = agent.parse_command(user_voice)
+            
+            # 분석 멘트 변경
+            msg = "AI가 텍스트와 이미지를 분석 중입니다..." if image_data else "AI가 텍스트를 분석 중입니다..."
+            with st.spinner(msg):
+                result = agent.parse_command(user_voice, image_data)
             
             if result:
                 prof = result.get("profiling", {})
@@ -201,7 +224,7 @@ with st.sidebar:
                 st.session_state['ai_log'] = "✅ 설정 적용 완료"
                 
                 if sim.get("species"):
-                    for i, k in enumerate(MasterPMICalculatorV22().insect_db.keys()):
+                    for i, k in enumerate(MasterPMICalculatorV23().insect_db.keys()):
                         if sim["species"].split()[0] in k:
                             st.session_state['sp_idx'] = i; break
                 if sim.get("stage"):
@@ -214,14 +237,14 @@ with st.sidebar:
                     st.session_state['ev_end'] = sim["event"]["end_hours_ago"]
                 
                 if sim.get("drug_type"):
-                    d_keys = list(MasterPMICalculatorV22().drug_effects.keys())
+                    d_keys = list(MasterPMICalculatorV23().drug_effects.keys())
                     if sim["drug_type"] in d_keys:
                         st.session_state['drug_idx'] = d_keys.index(sim["drug_type"])
                         st.toast(f"💊 약물 감지: {sim['drug_type']} 적용됨!")
 
                 st.rerun()
 
-cal = MasterPMICalculatorV22()
+cal = MasterPMICalculatorV23()
 c1, c2, c3 = st.columns(3)
 
 with c1:
@@ -239,7 +262,6 @@ with c2:
 with c3:
     st.subheader("3. 독성학(Drug) 설정")
     d_opts = list(cal.drug_effects.keys())
-    # [수정됨] 여기서 에러가 났던 부분을 안전하게 처리했습니다.
     sel_drug = st.selectbox("발견된 약물", d_opts, index=st.session_state.get('drug_idx', 0))
     
     eff_info = cal.drug_effects[sel_drug]
